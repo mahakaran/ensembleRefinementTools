@@ -1,7 +1,99 @@
+#Mahakaran Sandhu, RSC, 2019#
+
 import matplotlib.pyplot as plt
 import os
 import numpy as np
+import subprocess
+import random 
+import multiprocessing
 
+
+
+
+
+############################################################################################REPLICATE RUNNING MODULES##############################################################################################
+
+def replicates_setup(parentdir, p_opt, w_opt, t_opt, modelpath, datapath, cifpath, ligandNames, nreps=10):
+    """Ligand names is a list of names of ligands to restrain."""
+
+    replicate_dirs = list(range(1,nreps+1))
+
+    restr_sel = ['resname '+i +' or' if ligandNames.index(i)!=ligandNames.index(ligandNames[-1]) else 'resname '+i for i in ligandNames]
+    restr_str = ' '.join(restr_sel)
+    
+    
+
+
+
+    for i in replicate_dirs:
+        random_seed = random.randint(1000000, 9000000)
+        os.chdir(parentdir)
+        dirname = 'replicate_' + str(i)
+        outfilename = 'refine_' + str(i) +  '.sh'
+        os.mkdir(dirname)
+        filepath = os.path.join(dirname,outfilename)
+        outfile = open(filepath, 'w+')
+        outfile.write('#!/bin/bash \n \n')
+        outfile.write('p=' + str(p_opt) + '\n')
+        outfile.write('w=' + str(w_opt) + '\n')
+        outfile.write('t=' + str(t_opt) + '\n \n')
+        outfile.write('model='+modelpath+' \n')
+        outfile.write('data='+datapath+' \n')
+        outfile.write('cif='+cifpath+' \n \n')
+        outfile.write("phenix.ensemble_refinement $model $data $cif harmonic_restraints.selections='"+str(restr_str)+"' ptls=$p wxray_coupled_tbath_offset=$w tx=$t  nproc=1 seed=" + str(random_seed))
+        outfile.close()
+
+
+
+ 
+def runEnsembleRefinement(dirname):
+    print ('Now running:'+str(dirname))
+    os.system('cd '+ str(dirname) + '&& sh *sh')
+    print ('Finished running:'+str(dirname))
+
+def chunkIt(seq, num):
+    avg = len(seq) / float(num)
+    out = []
+    last = 0.0
+
+    while last < len(seq):
+        out.append(seq[int(last):int(last + avg)])
+        last += avg
+
+    return out
+
+def run_replicates(parentdir, cores):
+    """For a list of directories, use cores number of cores to run the ER protocol"""
+    replicate_dirs = [i for i in os.listdir(parentdir) if os.path.isdir(i) and 'replicate' in i]
+    completedER = []
+    
+    
+    x = len(replicate_dirs)/cores
+    
+    
+    
+    processedDirList = chunkIt(replicate_dirs, x)
+    print (processedDirList)
+
+    for i in processedDirList:
+        procs = []
+        for j in i:
+            print(j)
+            proc = multiprocessing.Process(target=runEnsembleRefinement, args=(j,))
+            procs.append(proc)
+            proc.start()
+        for k in procs:
+            k.join()
+
+
+
+
+
+
+
+
+
+#################################################################################################################ANALYSIS MODULES##############################################################################################################
 
 
 def split_chains(list_of_tuples):
@@ -77,9 +169,7 @@ def processrmsf_3(inlist):
         res_data_to_average = [resid]
         for chain in inlist:
             data_index = chain[0].index(resid)
-            print(data_index)
             rmsf_dat = chain[1][data_index]
-            print(rmsf_dat)
             res_data_to_average.append(rmsf_dat)
         to_average_data.append(res_data_to_average)
 
@@ -99,10 +189,106 @@ def processrmsf_4(inlist):
     return averaged_data
 
 
+def plot_xvg(xvg_file):
+    """Takes an input xvg file (string), label for the x-axis (string) and for the y-axis (string);
+    plots a plot"""
 
-def ensemble_RMSF(xvgfile):
-    return processrmsf_4(processrmsf_3(processrmsf_2(processrmsf_1(xvgfile))))
+    data = open(xvg_file)
+    data = data.readlines()
+    data = [i.strip() for i in data]
+    data = [i for i in data if ('@' not in i) and ('#' not in i)]
+    x_axis=[]
+    y_axis = []
+    for i in data: 
+        r = i.split()
+        x_axis.append(float(r[0]))
+        y_axis.append(float(r[1]))
+        
+    return (x_axis, y_axis)
+    
 
 
 
 
+def plot_replicate_RMSFs(parentdir):
+
+    ER_directory = parentdir
+    subplt_dims = (5,2)
+    figure,axs = plt.subplots(subplt_dims[0], subplt_dims[1], figsize=(15,15))
+
+    rows = [i for i in range(subplt_dims[0])]
+    cols = [i for i in range(subplt_dims[1])]
+
+    sbplt_size = len(rows)*len(cols)
+
+    j=0
+    k=0
+    for i in range(1,sbplt_size+1):
+        try: 
+            row_num = rows[j]
+            col_num = cols[k]
+        except:
+            j=0
+            k+=1
+            row_num = rows[j]
+            col_num = cols[k]
+        j+=1    
+
+        try:
+            rmsf_path = ER_directory+'/replicate_'+str(i)+'/rmsf.xvg'
+            rmsf_data = plot_xvg(rmsf_path)
+            axs[row_num,col_num].plot(rmsf_data[0], rmsf_data[1])
+            axs[row_num,col_num].set_title('replicate_'+str(i))
+        except:
+            pass
+
+
+        
+
+
+
+def ensemble_RMSF(replicate_dir):
+    return np.array(processrmsf_4(processrmsf_3(processrmsf_2(processrmsf_1(replicate_dir+'rmsf.xvg')))))
+
+
+
+
+
+
+def find_min_Rfree(parentdir):
+    import glob
+    os.chdir(parentdir)
+    data_list = []
+    rep_dirs = [i for i in os.listdir() if os.path.isdir(i) and ('replicate' in i) ]
+    for i in rep_dirs:
+        os.chdir(str(i))
+        logfile = glob.glob("*.log")
+        logfile = open(str(logfile[0]), 'r')
+        lines = logfile.readlines()
+        for j in lines: 
+            if ('FINAL' in j) and ('Rfree' in j):
+                r_free = float(j[28:36])
+        rep_name = i
+        out_tuple = (i,r_free)
+        data_list.append(out_tuple)
+        os.chdir(parentdir)
+        r_frees = [data_list[i][1] for i in range(len(data_list))]
+        repl_name = [data_list[i][0] for i in range(len(data_list))]
+    print (repl_name)
+    print (r_frees)
+    return (data_list[r_frees.index(min(r_frees))][0], data_list[r_frees.index(min(r_frees))][1])
+
+
+
+
+def get_rmsfs(parent_dir): 
+
+    rep_dirs = [i for i in os.listdir() if os.path.isdir(i) and ('replicate' in i) ]
+    
+    for i in rep_dirs:
+        os.chdir(i)
+        print(i)
+        subprocess.call('gunzip *.gz', shell=True)
+        subprocess.call('grep -vwE "(HOH|MPD|CAC|ZN)" *ensemble.pdb > clean_ensemble.pdb', shell=True)
+        subprocess.call("echo '3'|gmx rmsf -f clean_ensemble.pdb -s clean_ensemble.pdb -o rmsf.xvg -res", shell=True)
+        os.chdir(parent_dir)
