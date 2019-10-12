@@ -1,2 +1,1 @@
-# ensembleRefinementTools
-$PySemble: tools for ensemble refinement protocol with PHENIX
+# PySemble: tools for ensemble refinement protocol with PHENIX
