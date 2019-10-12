@@ -1,2 +1,1 @@
-# PySemble: a Python wrapper for PHENIX.ensemble_refine
- 
+# PySemble: a Python wrapper for Ensemble Refinement with PHENIX
